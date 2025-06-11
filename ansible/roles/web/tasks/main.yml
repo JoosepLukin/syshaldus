@@ -1,0 +1,25 @@
+---
+- name: Install Apache and PHP
+  apt:
+    name:
+      - apache2
+      - php
+      - libapache2-mod-php
+    state: present
+  become: yes
+  tags: web
+
+- name: Ensure Apache service is running
+  service:
+    name: apache2
+    state: started
+    enabled: true
+  become: yes
+  tags: web
+
+- name: Reminder to configure WordPress via UI
+  debug:
+    msg: "Open your browser and finish WordPress setup"
+  tags:
+    - web
+    - wordpress

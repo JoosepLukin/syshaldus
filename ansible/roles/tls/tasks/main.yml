@@ -1,0 +1,14 @@
+---
+- name: Install certbot
+  apt:
+    name: certbot
+    state: present
+  become: yes
+  tags: tls
+
+- name: Generate self-signed certificate
+  shell: openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/ssl/private/selfsigned.key -out /etc/ssl/certs/selfsigned.crt -subj "/CN=example.com"
+  args:
+    creates: /etc/ssl/certs/selfsigned.crt
+  become: yes
+  tags: tls
