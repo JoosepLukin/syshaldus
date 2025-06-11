@@ -16,3 +16,8 @@ Run a single part using tags:
 ```bash
 ansible-playbook playbook.yml --tags web
 ```
+
+The playbook expects that the target VM can reach the CentOS package
+repositories. If `dnf` fails with a `Cannot download repomd.xml` error,
+verify your network connectivity or configure a working mirror as
+described in the course lab manual.
