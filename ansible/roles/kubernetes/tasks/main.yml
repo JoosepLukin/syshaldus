@@ -1,0 +1,10 @@
+---
+- name: Kubernetes | Install kubectl
+  ansible.builtin.dnf:
+    name: kubectl
+    state: present
+
+- name: Kubernetes | Deploy example nginx deployment
+  ansible.builtin.command:
+    cmd: kubectl apply -f https://k8s.io/examples/application/deployment.yaml
+  changed_when: false

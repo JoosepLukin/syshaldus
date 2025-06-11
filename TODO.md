@@ -76,7 +76,7 @@ This repository contains Ansible playbooks for automating tasks from the Univers
 Run specific parts of the infrastructure using tags, for example:
 
 ```bash
-ansible-playbook site.yml --tags email
+ansible-playbook playbook.yml --tags email
 ```
 
 If any configuration (such as WordPress initial setup) requires manual action, you will be prompted during playbook execution.
