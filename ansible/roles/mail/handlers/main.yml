@@ -1,0 +1,29 @@
+---
+# handlers for mail role
+- name: Restart postfix
+  ansible.builtin.systemd:
+    name: postfix
+    state: restarted
+    enabled: yes
+
+- name: Restart dovecot
+  ansible.builtin.systemd:
+    name: dovecot
+    state: restarted
+    enabled: yes
+
+- name: Restart httpd
+  ansible.builtin.systemd:
+    name: httpd
+    state: restarted
+    enabled: yes
+
+- name: Restart mariadb
+  ansible.builtin.systemd:
+    name: mariadb
+    state: restarted
+    enabled: yes
+
+- name: Reload systemd
+  ansible.builtin.command:
+    cmd: systemctl daemon-reload

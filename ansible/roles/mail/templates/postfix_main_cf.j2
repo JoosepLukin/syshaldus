@@ -1,0 +1,30 @@
+# /etc/postfix/main.cf (templated)
+
+# Basic settings
+myhostname = mail.{{ hostname }}.{{ domain_name }}
+# mydomain will be derived automatically from myhostname
+myorigin = $mydomain
+
+# Listen on all interfaces
+inet_interfaces = all
+inet_protocols  = ipv4
+
+# Accept mail for these domains:
+mydestination = $myhostname, localhost.{{ hostname }}.{{ domain_name }}, localhost, {{ hostname }}.{{ domain_name }}
+
+# Trust only local host network:
+mynetworks_style = host
+
+# SASL via Dovecot
+smtp_sasl_type = dovecot
+smtp_sasl_path = private/auth
+smtp_sasl_auth_enable = yes
+smtpd_sasl_auth_enable = yes
+smtpd_recipient_restrictions = permit_mynetworks, permit_sasl_authenticated, reject
+smtpd_relay_restrictions = permit_sasl_authenticated, reject
+
+# Use LMTP socket to hand off mail to Dovecot:
+mailbox_transport = lmtp:unix:private/dovecot-lmtp
+
+# Logging:
+maillog_file = /var/log/maillog

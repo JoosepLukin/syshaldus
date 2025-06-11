@@ -1,0 +1,10 @@
+---
+- name: Restart httpd
+  ansible.builtin.systemd:
+    name: httpd
+    state: restarted
+    enabled: yes
+
+- name: Reload systemd
+  ansible.builtin.command:
+    cmd: systemctl daemon-reload

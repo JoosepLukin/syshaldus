@@ -1,0 +1,24 @@
+---
+- hosts: vm
+  user: centos
+  become: yes
+  become_user: root
+
+  vars:
+    hostname: kastekann
+    domain_name: sa.cs.ut.ee
+    external_ip: 172.17.89.29
+    external_ip_last_octet: 29
+    forward_serial: 2025060101
+    reverse_serial: 2025060101
+    reverse_zone_name: "89.17.172.in-addr.arpa"
+
+    # (Lab 6 variables)
+    mysql_root_password: "pass"
+    roundcube_db_password: "pass"
+
+  roles:
+    - { role: etais,   tags: etais }
+    - { role: dns,     tags: dns }
+    - { role: apache,  tags: apache }
+    - { role: mail,    tags: mail }

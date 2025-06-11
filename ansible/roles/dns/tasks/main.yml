@@ -1,15 +1,190 @@
 ---
-- name: Install BIND9
-  apt:
-    name: bind9
-    state: present
-  become: yes
-  tags: dns
+- name: DNS | Autoremove unneeded packages installed as dependencies
+  ansible.builtin.dnf:
+    autoremove: yes
 
-- name: Ensure BIND service is running
-  service:
-    name: bind9
+- name: DNS | Disable IPv6 - deploy sysctl conf
+  ansible.builtin.copy:
+    src: 70-ipv6.conf
+    dest: /etc/sysctl.d/70-ipv6.conf
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: DNS | Apply sysctl to disable IPv6 now
+  ansible.posix.sysctl:
+    name: net.ipv6.conf.default.disable_ipv6
+    value: '1'
+    sysctl_file: /etc/sysctl.d/70-ipv6.conf
+    reload: yes
+
+- name: DNS | Apply sysctl to disable IPv6 (all)
+  ansible.posix.sysctl:
+    name: net.ipv6.conf.all.disable_ipv6
+    value: '1'
+    sysctl_file: /etc/sysctl.d/70-ipv6.conf
+    reload: yes
+
+- name: DNS | Install BIND and bind-utils
+  ansible.builtin.dnf:
+    name:
+      - bind
+      - bind-utils
+    state: present
+
+- name: DNS | Create /var/named/log directory
+  ansible.builtin.file:
+    path: /var/named/log
+    state: directory
+    owner: named
+    group: named
+    mode: '0750'
+
+- name: DNS | Create BIND log files
+  ansible.builtin.file:
+    path: "/var/named/log/{{ item }}"
+    state: touch
+    owner: named
+    group: named
+    mode: '0640'
+  loop:
+    - default
+    - auth_servers
+    - zone_transfers
+    - client_security
+    - queries
+    - query-errors
+
+- name: DNS | Restore SELinux context for /var/named/log
+  ansible.builtin.command:
+    cmd: restorecon -Rv /var/named/log
+  changed_when: false
+
+# Open DNS (53) and Consul (8301) in firewalld
+- name: DNS | Open DNS port TCP 53
+  ansible.posix.firewalld:
+    port: 53/tcp
+    permanent: yes
+    state: enabled
+
+- name: DNS | Open DNS port UDP 53
+  ansible.posix.firewalld:
+    port: 53/udp
+    permanent: yes
+    state: enabled
+
+- name: DNS | Open Consul port TCP 8301
+  ansible.posix.firewalld:
+    port: 8301/tcp
+    permanent: yes
+    state: enabled
+
+- name: DNS | Open Consul port UDP 8301
+  ansible.posix.firewalld:
+    port: 8301/udp
+    permanent: yes
+    state: enabled
+
+- name: DNS | Reload firewalld
+  ansible.builtin.command:
+    cmd: firewall-cmd --reload
+  changed_when: false
+
+# Ensure /etc/named.conf is deployed so BIND listens on 0.0.0.0:53
+- name: DNS | Deploy /etc/named.conf from template
+  ansible.builtin.template:
+    src: named.conf.j2
+    dest: /etc/named.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart named
+
+# Create forward zone file
+- name: DNS | Create forward zone file from template
+  ansible.builtin.template:
+    src: forward_zone.j2
+    dest: /etc/named/{{ hostname }}.sa.cs.ut.ee
+    owner: root
+    group: named
+    mode: '0640'
+  notify: Reload named
+
+# Create reverse zone file
+- name: DNS | Create reverse zone file from template
+  ansible.builtin.template:
+    src: reverse_zone.j2
+    dest: /etc/named/reverse.{{ hostname }}.sa.cs.ut.ee
+    owner: root
+    group: named
+    mode: '0640'
+  notify: Reload named
+
+# Install netcat (for dummy listeners on 8301)
+- name: DNS | Install netcat
+  ansible.builtin.dnf:
+    name: nc
+    state: present
+
+# Start dummy UDP listener on 8301 (if not already started)
+- name: DNS | Start UDP listener on port 8301 (dummy)
+  ansible.builtin.shell: |
+    nohup nc -u -l 8301 >/dev/null 2>&1 &
+  args:
+    creates: /var/run/consul_udp_listener.started
+  tags: consul_dummy
+
+# Touch a file so we don't start UDP listener again
+- name: DNS | Mark UDP listener started
+  ansible.builtin.file:
+    path: /var/run/consul_udp_listener.started
+    state: touch
+  tags: consul_dummy
+
+# Start dummy TCP listener on 8301 (if not already started)
+- name: DNS | Start TCP listener on port 8301 (dummy)
+  ansible.builtin.shell: |
+    nohup nc -l 8301 >/dev/null 2>&1 &
+  args:
+    creates: /var/run/consul_tcp_listener.started
+  tags: consul_dummy
+
+# Touch a file so we don't start TCP listener again
+- name: DNS | Mark TCP listener started
+  ansible.builtin.file:
+    path: /var/run/consul_tcp_listener.started
+    state: touch
+  tags: consul_dummy
+
+# Ensure named service is running & enabled
+- name: DNS | Ensure named service is started & enabled
+  ansible.builtin.service:
+    name: named
     state: started
-    enabled: true
-  become: yes
-  tags: dns
+    enabled: yes
+
+# Override /etc/resolv.conf (remove immutable, write, reapply immutable)
+- name: DNS | Remove immutable flag from /etc/resolv.conf
+  ansible.builtin.command:
+    cmd: chattr -i /etc/resolv.conf
+  become: true
+  changed_when: false
+  ignore_errors: true
+
+- name: DNS | Override /etc/resolv.conf so we use localhost
+  ansible.builtin.copy:
+    content: |
+      nameserver 127.0.0.1
+      search {{ hostname }}.{{ domain_name }}
+    dest: /etc/resolv.conf
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+
+- name: DNS | Re-apply immutable flag to /etc/resolv.conf
+  ansible.builtin.command:
+    cmd: chattr +i /etc/resolv.conf
+  become: true
+  changed_when: false
+  ignore_errors: true

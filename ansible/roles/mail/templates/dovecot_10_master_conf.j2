@@ -1,0 +1,23 @@
+# /etc/dovecot/conf.d/10-master.conf (templated)
+
+service imap-login {
+  inet_listener imap {
+    port = 143
+  }
+}
+
+service lmtp {
+  unix_listener /var/spool/postfix/private/dovecot-lmtp {
+    mode = 0600
+    user = postfix
+    group = postfix
+  }
+}
+
+service auth {
+  unix_listener /var/spool/postfix/private/auth {
+    mode = 0600
+    user = postfix
+    group = postfix
+  }
+}

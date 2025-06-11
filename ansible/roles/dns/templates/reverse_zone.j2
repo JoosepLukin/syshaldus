@@ -1,0 +1,11 @@
+$ORIGIN {{ reverse_zone_name }}.
+$TTL    15M
+@       IN      SOA     ns1.{{ hostname }}.{{ domain_name }}. root.{{ hostname }}.{{ domain_name }}. (
+                             {{ reverse_serial }}    ; Serial
+                             15M           ; Refresh
+                              5M           ; Retry
+                            120M           ; Expire
+                             600 )         ; Negative Cache TTL
+
+@               IN      NS      ns1.{{ hostname }}.{{ domain_name }}.
+{{ external_ip_last_octet }}    IN      PTR     {{ hostname }}.{{ domain_name }}.

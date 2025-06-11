@@ -1,0 +1,430 @@
+---
+# roles/mail/tasks/main.yml
+
+############################
+# 1. Install necessary packages
+############################
+- name: Mail | Install necessary packages
+  ansible.builtin.dnf:
+    name:
+      - dovecot
+      - dovecot-mysql
+      - dovecot-pigeonhole
+      - cyrus-sasl
+      - cyrus-sasl-plain
+      - telnet
+      - mariadb-server
+      - mariadb
+      - epel-release
+      - dnf-plugins-core
+      - httpd
+      - php
+      - php-fpm
+      - php-mysqlnd
+      - php-pear
+      - php-cli
+      - php-xml
+      - php-mbstring
+      - php-intl
+      - php-ldap
+      - php-gd
+      - php-curl
+      - make
+      - ImageMagick
+      - ImageMagick-devel
+      - ImageMagick-perl
+      - pcre-devel
+      - zlib
+      - zlib-devel
+      - libzip
+      - libzip-devel
+      - libmcrypt-devel
+      - nc
+      - wget
+      - unzip
+    state: present
+
+- name: Mail | Enable Remi CRB repository
+  ansible.builtin.shell: dnf config-manager --set-enabled crb
+
+- name: Mail | Install PECL extensions from RPMs
+  ansible.builtin.dnf:
+    name:
+      - php-pecl-imagick
+      - php-pecl-mcrypt
+      - php-pecl-zip
+    state: present
+  notify: Restart httpd
+
+
+- name: Mail | Drop in .ini files for PECL extensions
+  ansible.builtin.copy:
+    dest: "/etc/php.d/20-{{ item }}.ini"
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      extension={{ item }}.so
+  loop:
+    - imagick
+    - mcrypt
+    - zip
+  notify: Restart httpd
+
+############################
+# 2. Start & enable MariaDB (for Roundcube DB)
+############################
+- name: Mail | Start and enable mariadb
+  ansible.builtin.systemd:
+    name: mariadb
+    state: started
+    enabled: yes
+
+############################
+# 3. Create Roundcube database and user
+############################
+- name: Mail | Create Roundcube database
+  community.mysql.mysql_db:
+    name: roundcubemail
+    state: present
+    login_unix_socket: /var/lib/mysql/mysql.sock
+
+- name: Mail | Create Roundcube DB user
+  community.mysql.mysql_user:
+    name: roundcube
+    password: "{{ roundcube_db_password | default('changeme') }}"
+    priv: 'roundcubemail.*:ALL'
+    host: localhost
+    state: present
+    login_unix_socket: /var/lib/mysql/mysql.sock
+
+############################
+# 4. Open firewall ports: 25, 587, 143, 80
+############################
+- name: Mail | Ensure firewalld is installed
+  ansible.builtin.dnf:
+    name: firewalld
+    state: present
+
+- name: Mail | Start and enable firewalld
+  ansible.builtin.systemd:
+    name: firewalld
+    state: started
+    enabled: yes
+
+- name: Mail | Open SMTP port 25
+  ansible.posix.firewalld:
+    port: 25/tcp
+    permanent: yes
+    state: enabled
+
+- name: Mail | Open Submission port 587
+  ansible.posix.firewalld:
+    port: 587/tcp
+    permanent: yes
+    state: enabled
+
+- name: Mail | Open IMAP port 143
+  ansible.posix.firewalld:
+    port: 143/tcp
+    permanent: yes
+    state: enabled
+
+- name: Mail | Open HTTP port 80
+  ansible.posix.firewalld:
+    port: 80/tcp
+    permanent: yes
+    state: enabled
+
+- name: Mail | Reload firewalld
+  ansible.builtin.command:
+    cmd: firewall-cmd --reload
+  changed_when: false
+
+############################
+# 5. Postfix configuration
+############################
+
+- name: Mail | Stop and disable Postfix if it’s running
+  ansible.builtin.systemd:
+    name: postfix
+    state: stopped
+    enabled: no
+  ignore_errors: true
+
+- name: Mail | Remove any existing Postfix RPM
+  ansible.builtin.yum:
+    name: postfix
+    state: absent
+
+- name: Mail | Remove leftover /etc/postfix directory
+  ansible.builtin.file:
+    path: /etc/postfix
+    state: absent
+
+- name: Mail | Remove leftover /var/spool/postfix directory
+  ansible.builtin.file:
+    path: /var/spool/postfix
+    state: absent
+
+- name: Mail | Install Postfix package from OS repo
+  ansible.builtin.yum:
+    name: postfix
+    state: present
+
+- name: Mail | Verify that RPM dropped in /etc/postfix/master.cf
+  ansible.builtin.stat:
+    path: /etc/postfix/master.cf
+  register: postfix_master_stat
+
+- name: Mail | Fail if /etc/postfix/master.cf is still missing
+  ansible.builtin.fail:
+    msg: "Postfix master.cf is missing—your OS package didn’t install correctly."
+  when: not postfix_master_stat.stat.exists
+
+- name: Mail | Let Postfix set correct ownership/permissions on its queue directories
+  ansible.builtin.command:
+    cmd: /usr/sbin/postfix set-permissions
+  args:
+    creates: /var/spool/postfix/public
+  register: postfix_perm
+  failed_when: postfix_perm.rc != 0 and "postfix-files" in postfix_perm.stderr
+
+- name: Mail | Deploy postfix main.cf from template
+  ansible.builtin.template:
+    src: postfix_main_cf.j2
+    dest: /etc/postfix/main.cf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart postfix
+
+- name: Mail | Ensure Postfix is started and enabled
+  ansible.builtin.systemd:
+    name: postfix
+    state: started
+    enabled: yes
+
+# roles/mail/handlers/main.yml
+
+- name: Restart postfix
+  ansible.builtin.systemd:
+    name: postfix
+    state: restarted
+    enabled: yes
+
+############################
+# 6. Create a test user "mailuser"
+############################
+- name: Mail | Create mailuser account
+  ansible.builtin.user:
+    name: mailuser
+    comment: "Email test user"
+    shell: /bin/bash
+    create_home: yes
+    password: "{{ 'mailuser' | password_hash('sha512') }}"
+    state: present
+
+############################
+# 7. Send a local email (smoke test) from "mailuser" to "root"
+############################
+- name: Mail | Send a local test email
+  ansible.builtin.shell: |
+    echo "Test mail from mailuser on {{ ansible_fqdn }}" | sendmail root@localhost
+  args:
+    executable: /bin/bash
+
+############################
+# 8. Dovecot configuration
+############################
+- name: Mail | Configure Dovecot to log more
+  ansible.builtin.template:
+    src: dovecot_10_logging_conf.j2
+    dest: /etc/dovecot/conf.d/10-logging.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart dovecot
+
+- name: Mail | Enable IMAP and LMTP in dovecot.conf
+  ansible.builtin.template:
+    src: dovecot_main_conf.j2
+    dest: /etc/dovecot/dovecot.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart dovecot
+
+- name: Mail | Allow PLAIN and LOGIN in Dovecot auth
+  ansible.builtin.template:
+    src: dovecot_10_auth_conf.j2
+    dest: /etc/dovecot/conf.d/10-auth.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart dovecot
+
+- name: Mail | Set mail_location and privileges in Dovecot mail conf
+  ansible.builtin.template:
+    src: dovecot_10_mail_conf.j2
+    dest: /etc/dovecot/conf.d/10-mail.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart dovecot
+
+- name: Mail | Ensure Dovecot user 'dovecot' is in the mail group
+  ansible.builtin.user:
+    name: dovecot
+    groups: mail
+    append: yes
+  notify: Restart dovecot
+
+- name: Mail | Configure Dovecot mailboxes auto‐create
+  ansible.builtin.template:
+    src: dovecot_15_mailboxes_conf.j2
+    dest: /etc/dovecot/conf.d/15-mailboxes.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart dovecot
+
+- name: Mail | Configure Dovecot LMTP listener
+  ansible.builtin.template:
+    src: dovecot_10_master_conf.j2
+    dest: /etc/dovecot/conf.d/10-master.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart dovecot
+
+- name: Mail | Ensure Dovecot is started and enabled
+  ansible.builtin.systemd:
+    name: dovecot
+    state: started
+    enabled: yes
+
+############################
+# 9. Configure Postfix to hand off mail to Dovecot LMTP
+############################
+- name: Mail | Reload systemd so LMTP socket is recognized
+  ansible.builtin.command:
+    cmd: systemctl daemon-reload
+  changed_when: false
+
+- name: Mail | Ensure Postfix delivers to Dovecot LMTP socket
+  ansible.builtin.lineinfile:
+    path: /etc/postfix/main.cf
+    regexp: '^#?mailbox_transport =.*'
+    line: "mailbox_transport = lmtp:unix:private/dovecot-lmtp"
+    state: present
+  notify: Restart postfix
+
+############################
+# 10. Enable port 587 submission (SASL via Dovecot)
+############################
+- name: Mail | Un-comment and configure submission service in master.cf
+  ansible.builtin.replace:
+    path: /etc/postfix/master.cf
+    regexp: '^#submission'
+    replace: |
+      submission inet n       -       n       -       -       smtpd
+        -o syslog_name=postfix/submission
+        -o smtpd_sasl_auth_enable=yes
+        -o smtpd_recipient_restrictions=permit_mynetworks,permit_sasl_authenticated,reject
+        -o smtpd_relay_restrictions=permit_sasl_authenticated,reject
+        -o smtpd_sasl_type=dovecot
+        -o smtpd_sasl_path=private/auth
+  notify: Restart postfix
+
+- name: Mail | Add Dovecot auth socket listener for Postfix submission
+  ansible.builtin.blockinfile:
+    path: /etc/dovecot/conf.d/10-master.conf
+    marker: "# {mark} ANSIBLE ADDED mail auth socket"
+    block: |
+      service auth {
+        unix_listener /var/spool/postfix/private/auth {
+          mode = 0600
+          user = postfix
+          group = postfix
+        }
+      }
+  notify: Restart dovecot
+
+############################
+# 11. Roundcube installation
+############################
+- name: Mail | Download Roundcube 1.6.1
+  ansible.builtin.get_url:
+    url: https://github.com/roundcube/roundcubemail/releases/download/1.6.1/roundcubemail-1.6.1-complete.tar.gz
+    dest: /tmp/roundcube.tar.gz
+    mode: '0644'
+
+- name: Mail | Unarchive Roundcube to /var/www/html/roundcubemail
+  ansible.builtin.unarchive:
+    src: /tmp/roundcube.tar.gz
+    dest: /var/www/html/
+    remote_src: yes
+  notify: Restart httpd
+
+- name: Mail | Rename extracted dir to roundcubemail
+  ansible.builtin.command:
+    cmd: mv /var/www/html/roundcubemail-1.6.1 /var/www/html/roundcubemail
+  args:
+    creates: /var/www/html/roundcubemail
+  notify: Restart httpd
+
+- name: Mail | Set ownership and SELinux context on Roundcube
+  ansible.builtin.file:
+    path: /var/www/html/roundcubemail
+    recurse: yes
+    owner: apache
+    group: apache
+  notify: Restart httpd
+
+- name: Mail | Apply SELinux context for Roundcube directory
+  ansible.builtin.command:
+    cmd: chcon -R -t httpd_sys_rw_content_t /var/www/html/roundcubemail
+  changed_when: false
+
+- name: Mail | Create Roundcube log directory
+  ansible.builtin.file:
+    path: /var/log/roundcube
+    state: directory
+    owner: apache
+    group: apache
+    mode: '0755'
+
+- name: Mail | Deploy Roundcube Apache vhost
+  ansible.builtin.template:
+    src: roundcube_apache_conf.j2
+    dest: /etc/httpd/conf.d/mail.{{ hostname }}.{{ domain_name }}.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart httpd
+
+############################
+# 12. Final syntax checks
+############################
+- name: Mail | Test Postfix config
+  ansible.builtin.command:
+    cmd: postconf -n
+  register: postfix_config
+  ignore_errors: yes
+
+- name: Mail | Show Postfix config (changed entries)
+  ansible.builtin.debug:
+    var: postfix_config.stdout_lines
+  when: postfix_config.rc != 0
+
+- name: Mail | Test Dovecot config
+  ansible.builtin.command:
+    cmd: doveconf -n
+  register: dovecot_config
+  ignore_errors: yes
+
+- name: Mail | Show Dovecot config errors (if any)
+  ansible.builtin.debug:
+    var: dovecot_config.stderr
+  when: dovecot_config.rc != 0

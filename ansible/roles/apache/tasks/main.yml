@@ -1,0 +1,562 @@
+---
+# roles/apache/tasks/main.yml
+
+###########
+# 1. Install required packages
+###########
+- name: Apache | Install httpd, PHP, MariaDB server, ModSecurity, pip, and utilities
+  ansible.builtin.dnf:
+    name:
+      - httpd
+      - php
+      - php-mysqlnd
+      - php-fpm
+      - mariadb-server
+      - mod_security
+      - python3-pip
+      - tar
+      - curl
+      - php-json
+      - python3-PyMySQL
+      - nc
+    state: present
+
+- name: Apache | Reinstall httpd to restore missing configuration files if needed
+  ansible.builtin.command:
+    cmd: dnf reinstall -y httpd
+  changed_when: false
+
+###########
+# 2. Remove broken brotli module config so conf.modules.d doesn’t fail
+###########
+- name: Apache | Remove /etc/httpd/conf.modules.d/00-brotli.conf if present
+  ansible.builtin.file:
+    path: /etc/httpd/conf.modules.d/00-brotli.conf
+    state: absent
+
+###########
+# 3. Ensure /etc/httpd/conf/httpd.conf exists
+###########
+- name: Apache | Check for /etc/httpd/conf/httpd.conf
+  ansible.builtin.stat:
+    path: /etc/httpd/conf/httpd.conf
+  register: httpd_conf_stat
+
+- name: Apache | Ensure /etc/httpd/conf directory exists
+  ansible.builtin.file:
+    path: /etc/httpd/conf
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Apache | Create minimal httpd.conf if missing
+  ansible.builtin.copy:
+    dest: /etc/httpd/conf/httpd.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      ServerRoot "/etc/httpd"
+      Listen 80
+
+      IncludeOptional conf.modules.d/*.conf
+
+      User apache
+      Group apache
+
+      ServerAdmin root@localhost
+      <Directory />
+          AllowOverride none
+          Require all denied
+      </Directory>
+
+      DocumentRoot "/var/www/html"
+      <Directory "/var/www/html">
+          AllowOverride None
+          Require all granted
+      </Directory>
+
+      ErrorLog "logs/error_log"
+      LogLevel warn
+
+      IncludeOptional conf.d/*.conf
+  when: not httpd_conf_stat.stat.exists
+
+- name: Apache | Ensure permissions on /etc/httpd/conf/httpd.conf are correct
+  ansible.builtin.file:
+    path: /etc/httpd/conf/httpd.conf
+    owner: root
+    group: root
+    mode: '0644'
+
+###########
+# 4. Ensure firewalld is running and open HTTP (80)
+###########
+- name: Apache | Ensure firewalld is installed
+  ansible.builtin.dnf:
+    name: firewalld
+    state: present
+
+- name: Apache | Start and enable firewalld
+  ansible.builtin.systemd:
+    name: firewalld
+    state: started
+    enabled: yes
+
+- name: Apache | Open HTTP port (80) in firewalld
+  ansible.posix.firewalld:
+    service: http
+    permanent: yes
+    state: enabled
+
+- name: Apache | Reload firewalld
+  ansible.builtin.command:
+    cmd: firewall-cmd --reload
+  changed_when: false
+
+###########
+# 5. SELinux booleans and context prep
+###########
+- name: Apache | Enable httpd_can_network_connect
+  ansible.posix.seboolean:
+    name: httpd_can_network_connect
+    state: yes
+    persistent: yes
+
+- name: Apache | Restore SELinux context on /etc/httpd
+  ansible.builtin.command:
+    cmd: restorecon -Rv /etc/httpd
+  changed_when: false
+
+- name: Apache | Restore SELinux context on /var/www/html
+  ansible.builtin.command:
+    cmd: restorecon -Rv /var/www/html
+  changed_when: false
+
+- name: Apache | Restore SELinux context on /var/log/httpd
+  ansible.builtin.command:
+    cmd: restorecon -Rv /var/log/httpd
+  changed_when: false
+
+###########
+# 6. Start and enable MariaDB
+###########
+- name: Apache | Start and enable mariadb
+  ansible.builtin.systemd:
+    name: mariadb
+    state: started
+    enabled: yes
+
+###########
+# 7. Create WordPress database and user
+###########
+- name: Apache | Create WordPress database
+  community.mysql.mysql_db:
+    name: wordpress
+    state: present
+    login_user: root
+    login_unix_socket: /var/lib/mysql/mysql.sock
+
+- name: Apache | Create MySQL user 'admin'@'localhost'
+  community.mysql.mysql_user:
+    name: admin
+    password: pass
+    priv: 'wordpress.*:ALL'
+    host: localhost
+    state: present
+    login_user: root
+    login_unix_socket: /var/lib/mysql/mysql.sock
+
+###########
+# 8. Ensure /var/log/httpd and php-errors.log exist
+###########
+- name: Apache | Ensure /var/log/httpd directory exists
+  ansible.builtin.file:
+    path: /var/log/httpd
+    state: directory
+    owner: apache
+    group: apache
+    mode: '0755'
+
+- name: Apache | Create php-errors.log for PHP-FPM
+  ansible.builtin.file:
+    path: /var/log/httpd/php-errors.log
+    state: touch
+    owner: apache
+    group: apache
+    mode: '0644'
+
+###########
+# 9. Start and enable PHP-FPM
+###########
+- name: Apache | Remove invalid error_log directive from PHP-FPM pool
+  ansible.builtin.lineinfile:
+    path: /etc/php-fpm.d/www.conf
+    regexp: '^error_log\s*='
+    state: absent
+
+- name: Apache | Redirect PHP-FPM global error_log
+  ansible.builtin.lineinfile:
+    path: /etc/php-fpm.conf
+    regexp: '^error_log\s*='
+    line: 'error_log = /var/log/httpd/php-errors.log'
+    create: yes
+
+- name: Apache | Start and enable php-fpm
+  ansible.builtin.systemd:
+    name: php-fpm
+    state: started
+    enabled: yes
+
+###########
+# 10. Ensure /etc/httpd/conf.d and modsecurity directories exist
+###########
+- name: Apache | Ensure /etc/httpd/conf.d exists
+  ansible.builtin.file:
+    path: /etc/httpd/conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Apache | Ensure /etc/httpd/modsecurity.d exists
+  ansible.builtin.file:
+    path: /etc/httpd/modsecurity.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Apache | Ensure /etc/httpd/modsecurity.d/activated_rules exists
+  ansible.builtin.file:
+    path: /etc/httpd/modsecurity.d/activated_rules
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+###########
+# 11. Enable ModSecurity/ForensicLog modules
+###########
+- name: Apache | Create modsecurity load file
+  ansible.builtin.copy:
+    dest: /etc/httpd/conf.d/10-modsecurity.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      LoadModule security2_module modules/mod_security2.so
+      LoadModule log_forensic_module modules/mod_log_forensic.so
+  notify: Restart httpd
+
+###########
+# 12. Create ModSecurity debug log (prevents “modsec_debug.log” missing error)
+###########
+- name: Apache | Create ModSecurity debug log file
+  ansible.builtin.file:
+    path: /var/log/httpd/modsec_debug.log
+    state: touch
+    owner: apache
+    group: apache
+    mode: '0640'
+
+###########
+# 13. Create forensic log files
+###########
+- name: Apache | Create forensic log file for www
+  ansible.builtin.file:
+    path: /var/log/httpd/www-{{ hostname }}-forensic.log
+    state: touch
+    owner: apache
+    group: apache
+    mode: '0640'
+
+- name: Apache | Create forensic log file for proxy
+  ansible.builtin.file:
+    path: /var/log/httpd/proxy-{{ hostname }}-forensic.log
+    state: touch
+    owner: apache
+    group: apache
+    mode: '0640'
+
+- name: Apache | Create forensic log file for wordpress
+  ansible.builtin.file:
+    path: /var/log/httpd/wordpress-{{ hostname }}-forensic.log
+    state: touch
+    owner: apache
+    group: apache
+    mode: '0640'
+
+###########
+# 14. Create dummy Consul listeners (for DNS lab compatibility)
+###########
+- name: Apache | Start UDP dummy listener on port 8301
+  ansible.builtin.shell: |
+    nohup nc -u -l 8301 >/dev/null 2>&1 &
+  args:
+    creates: /var/run/consul_udp_listener.started
+
+- name: Apache | Mark UDP listener started
+  ansible.builtin.file:
+    path: /var/run/consul_udp_listener.started
+    state: touch
+
+- name: Apache | Start TCP dummy listener on port 8301
+  ansible.builtin.shell: |
+    nohup nc -l 8301 >/dev/null 2>&1 &
+  args:
+    creates: /var/run/consul_tcp_listener.started
+
+- name: Apache | Mark TCP listener started
+  ansible.builtin.file:
+    path: /var/run/consul_tcp_listener.started
+    state: touch
+
+###########
+# 15. Start and enable httpd
+###########
+- name: Apache | Start and enable httpd
+  ansible.builtin.systemd:
+    name: httpd
+    state: started
+    enabled: yes
+
+###########
+# 16. Deploy VirtualHost for www.<hostname>.<domain_name>
+###########
+- name: Apache | Create document root for www
+  ansible.builtin.file:
+    path: /var/www/html/www.{{ hostname }}/public_html
+    state: directory
+    owner: apache
+    group: apache
+    mode: '0755'
+    recurse: yes
+
+- name: Apache | Create index.html for www
+  ansible.builtin.copy:
+    dest: /var/www/html/www.{{ hostname }}/public_html/index.html
+    owner: apache
+    group: apache
+    mode: '0644'
+    content: |
+      <html>
+        <head><title>Welcome to www.{{ hostname }}.{{ domain_name }}</title></head>
+        <body>
+          <h1>www.{{ hostname }}.{{ domain_name }}</h1>
+          <p>This is the default page for www.{{ hostname }}.{{ domain_name }}.</p>
+        </body>
+      </html>
+
+- name: Apache | Deploy vhost for www.{{ hostname }}.{{ domain_name }}
+  ansible.builtin.copy:
+    dest: /etc/httpd/conf.d/www.{{ hostname }}.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      <VirtualHost *:80>
+        ServerName www.{{ hostname }}.{{ domain_name }}
+        DocumentRoot /var/www/html/www.{{ hostname }}/public_html
+
+        <Directory "/var/www/html/www.{{ hostname }}/public_html">
+          AllowOverride All
+          Require all granted
+        </Directory>
+
+        LogLevel warn
+        ErrorLog /var/log/httpd/www-{{ hostname }}-error.log
+        CustomLog /var/log/httpd/www-{{ hostname }}-access.log combined
+        ForensicLog /var/log/httpd/www-{{ hostname }}-forensic.log
+      </VirtualHost>
+  notify: Restart httpd
+
+###########
+# 17. Deploy VirtualHost as reverse proxy (Flask)
+###########
+- name: Apache | Install Flask via pip
+  ansible.builtin.pip:
+    name: flask
+
+- name: Apache | Create dedicated 'proxy' user
+  ansible.builtin.user:
+    name: proxy
+    shell: /usr/sbin/nologin
+    state: present
+    create_home: no
+
+- name: Apache | Create /usr/local/lib directory
+  ansible.builtin.file:
+    path: /usr/local/lib
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Apache | Deploy Flask app to /usr/local/lib/server.py
+  ansible.builtin.copy:
+    dest: /usr/local/lib/server.py
+    owner: proxy
+    group: proxy
+    mode: '0755'
+    content: |
+      #!/usr/bin/env python3
+      from flask import Flask
+      app = Flask(__name__)
+
+      @app.route("/")
+      def hello():
+          return "Hello World!"
+
+      if __name__ == "__main__":
+          app.run(port=5000)
+
+- name: Apache | Create systemd unit for Flask proxy
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/proxy.service
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=Python Proxy Service
+
+      [Service]
+      ExecStart=/usr/bin/python3 /usr/local/lib/server.py
+      Environment=PYTHONUNBUFFERED=1
+      Restart=on-failure
+      Type=simple
+      User=proxy
+
+      [Install]
+      WantedBy=default.target
+  notify: Reload systemd
+
+- name: Apache | Start and enable proxy.service
+  ansible.builtin.systemd:
+    name: proxy.service
+    state: started
+    enabled: yes
+
+- name: Apache | Deploy vhost for proxy.{{ hostname }}.{{ domain_name }}
+  ansible.builtin.copy:
+    dest: /etc/httpd/conf.d/proxy.{{ hostname }}.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      <VirtualHost *:80>
+        ServerName proxy.{{ hostname }}.{{ domain_name }}
+
+        ErrorLog /var/log/httpd/proxy-{{ hostname }}-error.log
+        CustomLog /var/log/httpd/proxy-{{ hostname }}-access.log combined
+
+        ProxyPreserveHost On
+        ProxyPass        /  http://localhost:5000/
+        ProxyPassReverse /  http://localhost:5000/
+        ForensicLog /var/log/httpd/proxy-{{ hostname }}-forensic.log
+      </VirtualHost>
+  notify: Restart httpd
+
+###########
+# 18. Deploy VirtualHost for WordPress
+###########
+- name: Apache | Download WordPress tarball
+  ansible.builtin.get_url:
+    url: https://wordpress.org/latest.tar.gz
+    dest: /tmp/wordpress.tar.gz
+    mode: '0644'
+
+- name: Apache | Unarchive WordPress into /var/www/html
+  ansible.builtin.unarchive:
+    src: /tmp/wordpress.tar.gz
+    dest: /var/www/html
+    remote_src: yes
+  notify: Restart httpd
+
+- name: Apache | Adjust ownership for WordPress directory
+  ansible.builtin.file:
+    path: /var/www/html/wordpress
+    state: directory
+    recurse: yes
+    owner: apache
+    group: apache
+
+- name: Apache | Apply SELinux context to WordPress files
+  ansible.builtin.command:
+    cmd: chcon -R -t httpd_sys_rw_content_t /var/www/html/wordpress
+
+- name: Apache | Restore SELinux contexts under /var/www/html/wordpress
+  ansible.builtin.command:
+    cmd: restorecon -Rv /var/www/html/wordpress
+  changed_when: false
+
+- name: Apache | Deploy vhost for wordpress.{{ hostname }}.{{ domain_name }}
+  ansible.builtin.copy:
+    dest: /etc/httpd/conf.d/wordpress.{{ hostname }}.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      <VirtualHost *:80>
+        ServerName wordpress.{{ hostname }}.{{ domain_name }}
+        DocumentRoot /var/www/html/wordpress
+
+        <Directory "/var/www/html/wordpress">
+          AllowOverride All
+          Require all granted
+        </Directory>
+
+        <FilesMatch \.php$>
+          SetHandler "proxy:unix:/run/php-fpm/www.sock|fcgi://localhost/"
+        </FilesMatch>
+
+        LogLevel warn
+        ErrorLog /var/log/httpd/wordpress-{{ hostname }}-error.log
+        CustomLog /var/log/httpd/wordpress-{{ hostname }}-access.log combined
+        ForensicLog /var/log/httpd/wordpress-{{ hostname }}-forensic.log
+      </VirtualHost>
+  notify: Restart httpd
+
+###########
+# 19. Deploy custom ModSecurity rules
+###########
+- name: Apache | Remove any old custom rules
+  ansible.builtin.file:
+    path: /etc/httpd/modsecurity.d/activated_rules/100000_custom_rules.conf
+    state: absent
+
+- name: Apache | Deploy custom ModSecurity rule to catch /etc/passwd and other exploits
+  ansible.builtin.copy:
+    dest: /etc/httpd/modsecurity.d/activated_rules/100000_custom_rules.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      # Default action
+      SecDefaultAction "phase:2,deny,log,status:406"
+
+      # Block requests containing "/etc/passwd"
+      SecRule REQUEST_URI "etc/passwd" "id:'500001',phase:2,deny,log,status:406"
+
+      # Block directory traversal "../"
+      SecRule REQUEST_URI "\.\./" "id:'500002',phase:2,deny,log,status:406"
+
+      # Block "<SCRIPT" in any arguments
+      SecRule ARGS "<[Ss][Cc][Rr][Ii][Pp][Tt]" "id:'500003',phase:2,deny,log,status:406"
+  notify: Restart httpd
+
+###########
+# 20. Final Apache syntax check
+###########
+- name: Apache | Validate httpd configuration syntax
+  ansible.builtin.command:
+    cmd: apachectl configtest
+  register: httpd_syntax
+  ignore_errors: yes
+
+- name: Apache | Show Apache syntax errors (if any)
+  ansible.builtin.debug:
+    var: httpd_syntax.stderr
+  when: httpd_syntax.rc != 0

@@ -1,0 +1,23 @@
+; Zone file for {{ hostname }}.{{ domain_name }}
+$TTL    15M
+@       IN  SOA   ns1.{{ hostname }}.{{ domain_name }}. root.{{ hostname }}.{{ domain_name }}. (
+                         {{ forward_serial }}    ; Serial
+                         15M           ; Refresh
+                          5M           ; Retry
+                        120M           ; Expire
+                         600 )         ; Negative Cache TTL
+
+    IN  NS    ns1.{{ hostname }}.{{ domain_name }}.
+    IN  A     {{ external_ip }}
+ns1   IN  A   {{ external_ip }}
+{{ hostname }} IN  A   {{ external_ip }}
+
+; Mail-related records:
+@       IN  MX   10 mail.{{ hostname }}.{{ domain_name }}.
+mail    IN  A    {{ external_ip }}
+
+; CNAMEs for lab 5:
+www       IN  CNAME   {{ hostname }}.{{ domain_name }}.
+wordpress IN  CNAME   {{ hostname }}.{{ domain_name }}.
+proxy     IN  CNAME   {{ hostname }}.{{ domain_name }}.
+

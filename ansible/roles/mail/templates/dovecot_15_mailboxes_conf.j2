@@ -1,0 +1,18 @@
+# /etc/dovecot/conf.d/15-mailboxes.conf (templated)
+
+# Automatically create these folders if they do not exist
+
+namespace inbox {
+  mailbox Drafts {
+    special_use = \Drafts
+    auto = create
+  }
+  mailbox Trash {
+    special_use = \Trash
+    auto = create
+  }
+  mailbox Spam {
+    special_use = \Junk
+    auto = create
+  }
+}
