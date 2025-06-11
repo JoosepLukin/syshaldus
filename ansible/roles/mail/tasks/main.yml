@@ -199,41 +199,6 @@
     mode: '0644'
   notify: Restart postfix
 
-- name: Mail | Ensure Postfix is started and enabled
-  ansible.builtin.systemd:
-    name: postfix
-    state: started
-    enabled: yes
-
-# roles/mail/handlers/main.yml
-
-- name: Restart postfix
-  ansible.builtin.systemd:
-    name: postfix
-    state: restarted
-    enabled: yes
-
-############################
-# 6. Create a test user "mailuser"
-############################
-- name: Mail | Create mailuser account
-  ansible.builtin.user:
-    name: mailuser
-    comment: "Email test user"
-    shell: /bin/bash
-    create_home: yes
-    password: "{{ 'mailuser' | password_hash('sha512') }}"
-    state: present
-
-############################
-# 7. Send a local email (smoke test) from "mailuser" to "root"
-############################
-- name: Mail | Send a local test email
-  ansible.builtin.shell: |
-    echo "Test mail from mailuser on {{ ansible_fqdn }}" | sendmail root@localhost
-  args:
-    executable: /bin/bash
-
 ############################
 # 8. Dovecot configuration
 ############################
@@ -303,6 +268,27 @@
     name: dovecot
     state: started
     enabled: yes
+
+- name: Mail | Ensure Postfix is started and enabled
+  ansible.builtin.systemd:
+    name: postfix
+    state: started
+    enabled: yes
+
+- name: Mail | Create mailuser account
+  ansible.builtin.user:
+    name: mailuser
+    comment: "Email test user"
+    shell: /bin/bash
+    create_home: yes
+    password: "{{ 'mailuser' | password_hash('sha512') }}"
+    state: present
+
+- name: Mail | Send a local test email
+  ansible.builtin.shell: |
+    echo "Test mail from mailuser on {{ ansible_fqdn }}" | sendmail root@localhost
+  args:
+    executable: /bin/bash
 
 ############################
 # 9. Configure Postfix to hand off mail to Dovecot LMTP
