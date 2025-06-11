@@ -1,0 +1,12 @@
+---
+- name: DevOps | Build example container
+  ansible.builtin.command:
+    cmd: docker build -t devops-example /usr/local/src/devops-example
+  args:
+    creates: /usr/local/src/devops-example
+  changed_when: false
+
+- name: DevOps | Run example container
+  ansible.builtin.command:
+    cmd: docker run --name devops-example -d devops-example
+  changed_when: false

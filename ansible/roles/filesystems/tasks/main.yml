@@ -1,0 +1,41 @@
+---
+- name: Filesystems | Install NFS and Samba packages
+  ansible.builtin.dnf:
+    name:
+      - nfs-utils
+      - samba
+    state: present
+
+- name: Filesystems | Ensure /srv/share exists
+  ansible.builtin.file:
+    path: /srv/share
+    state: directory
+    mode: '0755'
+
+- name: Filesystems | Export /srv/share over NFS
+  ansible.builtin.lineinfile:
+    path: /etc/exports
+    line: "/srv/share *(rw,sync,no_root_squash)"
+    create: yes
+
+- name: Filesystems | Restart NFS server
+  ansible.builtin.systemd:
+    name: nfs-server
+    state: restarted
+    enabled: yes
+
+- name: Filesystems | Configure Samba share
+  ansible.builtin.blockinfile:
+    path: /etc/samba/smb.conf
+    marker: "# {mark} ANSIBLE MANAGED share"
+    block: |
+      [share]
+      path = /srv/share
+      browsable = yes
+      read only = no
+
+- name: Filesystems | Restart smb service
+  ansible.builtin.systemd:
+    name: smb
+    state: restarted
+    enabled: yes

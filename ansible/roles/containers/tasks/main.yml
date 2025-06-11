@@ -1,0 +1,16 @@
+---
+- name: Containers | Install Docker
+  ansible.builtin.dnf:
+    name: docker
+    state: present
+
+- name: Containers | Start and enable Docker
+  ansible.builtin.systemd:
+    name: docker
+    state: started
+    enabled: yes
+
+- name: Containers | Pull hello-world image
+  ansible.builtin.command:
+    cmd: docker pull hello-world
+  changed_when: false

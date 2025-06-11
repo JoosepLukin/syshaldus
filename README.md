@@ -8,11 +8,11 @@ To run all roles:
 
 ```bash
 cd ansible
-ansible-playbook site.yml
+ansible-playbook playbook.yml
 ```
 
 Run a single part using tags:
 
 ```bash
-ansible-playbook site.yml --tags web
+ansible-playbook playbook.yml --tags web
 ```

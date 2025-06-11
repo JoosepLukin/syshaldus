@@ -22,3 +22,9 @@
     - { role: dns,     tags: dns }
     - { role: apache,  tags: apache }
     - { role: mail,    tags: mail }
+    - { role: tls,     tags: tls }
+    - { role: filesystems, tags: fs }
+    - { role: containers, tags: containers }
+    - { role: devops, tags: devops }
+    - { role: kubernetes, tags: kubernetes }
+    - { role: monitoring, tags: monitoring }
