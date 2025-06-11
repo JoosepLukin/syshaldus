@@ -1,8 +1,4 @@
 ---
-- name: DNS | Autoremove unneeded packages installed as dependencies
-  ansible.builtin.dnf:
-    autoremove: yes
-
 - name: DNS | Disable IPv6 - deploy sysctl conf
   ansible.builtin.copy:
     src: 70-ipv6.conf
@@ -24,6 +20,10 @@
     value: '1'
     sysctl_file: /etc/sysctl.d/70-ipv6.conf
     reload: yes
+
+- name: DNS | Autoremove unneeded packages installed as dependencies
+  ansible.builtin.dnf:
+    autoremove: yes
 
 - name: DNS | Install BIND and bind-utils
   ansible.builtin.dnf:
