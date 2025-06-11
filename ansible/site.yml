@@ -1,0 +1,10 @@
+---
+- hosts: all
+  become: true
+  roles:
+    - dns
+    - web
+    - email
+    - tls
+    - docker
+    - monitoring
